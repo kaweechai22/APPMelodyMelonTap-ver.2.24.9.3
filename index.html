@@ -48,7 +48,7 @@
 <body>
 <div class="wrap">
   <h1>MelodyMelonTap 🎤🍉</h1>
-  <div class="version">Version: v2026.05.14-v25.2-ripenessAI-v24audio</div>
+  <div class="version">Version: v2026.05.14-v24.5-stable-ripeness-tune</div>
   <div class="voiceNote">🎙 AI Voice Summary อ่านสรุปผลแบบภาษาคน ไม่อ่านตัวเลขยาว</div>
 
   <div class="card">
@@ -401,7 +401,7 @@ function loop(){
       const feat=extractFeaturesFromEvent(eventFrames);
       if(feat){tapFeatures.push(feat);updateTapProgress();}
       else{setStatus("เสียงไม่ชัด กรุณาเคาะใหม่");setSignalQuality("สัญญาณอ่อน","bad");}
-      if(tapFeatures.length>=NUM_TAPS){listening=false;analyzeSession();
+      if(tapFeatures.length>=NUM_TAPS){listening=false;safeAnalyzeSession();
 function shareResult(){
   const text =
     document.getElementById("result").innerText +
@@ -679,72 +679,6 @@ function isBoundaryNearRipe(brix, juice, lowRatio, hollowPercent){
 }
 
 
-function classifyRipenessAIv25Stable(){
-  try{
-    const centroid = safe(typeof centroidUse !== "undefined" ? centroidUse : fMeanUse, fMeanUse);
-    const b150300 = safe(typeof band150300Use !== "undefined" ? band150300Use : 0.18, 0.18);
-    const b300600 = safe(typeof band300600Use !== "undefined" ? band300600Use : 0.25, 0.25);
-    const b100150 = safe(typeof band100150Use !== "undefined" ? band100150Use : 0.07, 0.07);
-    const b50100 = safe(typeof band50100Use !== "undefined" ? band50100Use : 0.07, 0.07);
-    const low = safe(typeof lowRatioUse !== "undefined" ? lowRatioUse : 0.30, 0.30);
-    const roll85 = safe(typeof rolloff85Use !== "undefined" ? rolloff85Use : 800, 800);
-    const peakCount = safe(typeof peakCountUse !== "undefined" ? peakCountUse : 10, 10);
-    const peak2 = safe(typeof peak2RatioUse !== "undefined" ? peak2RatioUse : 0.5, 0.5);
-
-    if(centroid <= 532.04){
-      if(b150300 <= 0.1873){
-        if(peakCount <= 16.5){
-          if(b300600 <= 0.24625) return "D";
-          return "C";
-        }else{
-          if(b100150 <= 0.0643) return "A";
-          return "C";
-        }
-      }else{
-        if(b50100 <= 0.0667) return "A";
-        if(low <= 0.39725) return "C";
-        return "A";
-      }
-    }else{
-      if(roll85 <= 857.42){
-        if(b100150 <= 0.0633){
-          if(peak2 <= 0.8663) return "C";
-          return "A";
-        }
-        return "D";
-      }
-      return "D";
-    }
-  }catch(e){
-    try{
-      return classifyRipeness3StageV229(lowRatioUse, highRatioUse, brix, firmness, juice, hollowPercent, fMeanUse);
-    }catch(e2){
-      return "C";
-    }
-  }
-}
-
-function stabilizeRipenessFromAudioQuality(aiGroup){
-  const sig = typeof sigScore !== "undefined" ? sigScore : 80;
-  const qsp = typeof qSpread !== "undefined" ? qSpread : 0;
-  const tauFb = typeof tauFallbackCount !== "undefined" ? tauFallbackCount : 0;
-
-  if(sig < 55 || qsp > 8 || tauFb >= 4){
-    try{
-      return classifyRipeness3StageV229(lowRatioUse, highRatioUse, brix, firmness, juice, hollowPercent, fMeanUse);
-    }catch(e){
-      return aiGroup;
-    }
-  }
-
-  if(aiGroup === "C"){
-    if(hollowPercent >= 18 || firmness <= 9 || lowRatioUse > 0.40) return "A";
-    if(highRatioUse > 0.52 && lowRatioUse <= 0.27) return "D";
-  }
-  return aiGroup;
-}
-
-
 function classifyRipeness3StageV229(lowRatio, highRatio, brix, firmness, juice, hollowPercent, fMean){
   if(lowRatio <= 0.27 && highRatio > 0.50) return "D";
   if(lowRatio <= 0.27 && highRatio <= 0.50){
@@ -761,6 +695,26 @@ function classifyRipeness3StageV229(lowRatio, highRatio, brix, firmness, juice, 
     return "C";
   }
   return "C";
+}
+
+
+function classifyRipenessV245(){
+  // v24.5 Stable Ripeness Tune from 210 samples.
+  // Uses v24 stable features only. Output: D=ใกล้สุก, C=สุกพอดี, A=สุกเกิน.
+  try{
+    if(safe(fMeanUse, 0) <= 532.0350037) {
+      if(safe(band150300Use, 0) <= 0.1873000041) {
+        return "C"; // สุกพอดี
+      } else {
+        return "A"; // สุกเกิน
+      }
+    } else {
+      return "D"; // ใกล้สุก
+    }
+  }catch(e){
+    console.log("v24.5 ripeness fallback", e);
+    return classifyRipeness3StageV229(lowRatioUse, highRatioUse, brix, firmness, juice, hollowPercent, fMeanUse);
+  }
 }
 
 function analyzeSession(){
@@ -789,7 +743,7 @@ function analyzeSession(){
   const ripenessLabel120=classifyRipenessAI120(avg.fPeak,Quse,tauUsed,fStdUse,fVarUse,hollowIndexUse,bwUse,highRatioUse,lowRatioUse,flatnessUse,band50100Use,band100150Use,band150300Use,band300600Use,band6001000Use,centroidUse,rolloff85Use,rolloff95Use,peakCountUse,peak2RatioUse,attackTimeUse,decayRatioUse);
 
   // v22.6: use field-calibrated ripeness rule as final decision
-  let group = stabilizeRipenessFromAudioQuality(classifyRipenessAIv25Stable());
+  let group = classifyRipenessV245();
 
   // Recalibrate hollow after final ripeness group is known
   const hollowPercentField = calibrateHollowFieldV226(hollowRawPercent, hollowPercent, group);
@@ -850,7 +804,7 @@ function analyzeSession(){
   document.getElementById("confVal").innerText=`${conf.toFixed(0)} %`;document.getElementById("groupVal").innerText=`ช่วงสุก: ${group}`;
   setBar("brixBar",brix/14*100);setBar("firmBar",crispPct);setBar("juiceBar",juice);setBar("hollowBar",100-hollowPercent*2.5);setBar("confBar",conf);
   document.getElementById("featureList").innerHTML=`
-    <li>Q: ${Quse.toFixed(2)}</li><li>tau: ${tauUsed.toFixed(3)}</li><li>f_peak: ${avg.fPeak.toFixed(1)} Hz</li><li>f_mean: ${fMeanUse.toFixed(1)} Hz</li><li>f_std: ${fStdUse.toFixed(1)} Hz</li><li>f_variance: ${fVarUse.toFixed(1)}</li><li>hollow_index: ${hollowIndexUse.toFixed(3)}</li><li>Brix raw: ${brixRaw.toFixed(2)} °Bx → calibrated: ${brix.toFixed(2)} °Bx</li><li>Firmness raw model: ${firmnessRaw.toFixed(1)} N → calibrated: ${firmness.toFixed(1)} N</li><li>Juice raw: ${juiceRaw.toFixed(1)}% → calibrated: ${juice.toFixed(1)}%</li><li>Hollow raw: ${hollowRawPercent.toFixed(1)}% → v22.5: ${hollowPercentOriginal.toFixed(1)}% → v22.6: ${hollowPercent.toFixed(1)}%</li><li>high_ratio: ${highRatioUse.toFixed(3)}</li><li>low_ratio: ${lowRatioUse.toFixed(3)}</li><li>flatness: ${flatnessUse.toFixed(3)}</li><li>rolloff85: ${rolloff85Use.toFixed(1)} Hz</li><li>peak count: ${peakCountUse.toFixed(0)}</li><li>low_ratio: ${avg.lowRatio.toFixed(3)}</li><li>flatness: ${avg.flatness.toFixed(3)}</li><li>Audio120 ripeness label: ${ripenessLabel120}</li><li>Final ripeness group: ${group} (v25.2 AI + v24 audio)</li><li>Perfect ripe meter: ${ripeMeter.toFixed(0)}/100</li><li>คุณภาพสัญญาณ: ${sigLabel} (${sigScore.toFixed(0)}%)</li><li>Q spread: ${qSpread.toFixed(2)}</li><li>tau fallback: ${tauFallbackCount}/${NUM_TAPS}</li><li>สถานะผล: ${warnLowQuality ? "ใช้ได้แต่ควรวัดซ้ำเพื่อยืนยัน" : "ใช้ได้"}</li>`;
+    <li>Q: ${Quse.toFixed(2)}</li><li>tau: ${tauUsed.toFixed(3)}</li><li>f_peak: ${avg.fPeak.toFixed(1)} Hz</li><li>f_mean: ${fMeanUse.toFixed(1)} Hz</li><li>f_std: ${fStdUse.toFixed(1)} Hz</li><li>f_variance: ${fVarUse.toFixed(1)}</li><li>hollow_index: ${hollowIndexUse.toFixed(3)}</li><li>Brix raw: ${brixRaw.toFixed(2)} °Bx → calibrated: ${brix.toFixed(2)} °Bx</li><li>Firmness raw model: ${firmnessRaw.toFixed(1)} N → calibrated: ${firmness.toFixed(1)} N</li><li>Juice raw: ${juiceRaw.toFixed(1)}% → calibrated: ${juice.toFixed(1)}%</li><li>Hollow raw: ${hollowRawPercent.toFixed(1)}% → v22.5: ${hollowPercentOriginal.toFixed(1)}% → v22.6: ${hollowPercent.toFixed(1)}%</li><li>high_ratio: ${highRatioUse.toFixed(3)}</li><li>low_ratio: ${lowRatioUse.toFixed(3)}</li><li>flatness: ${flatnessUse.toFixed(3)}</li><li>rolloff85: ${rolloff85Use.toFixed(1)} Hz</li><li>peak count: ${peakCountUse.toFixed(0)}</li><li>low_ratio: ${avg.lowRatio.toFixed(3)}</li><li>flatness: ${avg.flatness.toFixed(3)}</li><li>Audio120 ripeness label: ${ripenessLabel120}</li><li>Final ripeness group: ${group} (v24.5 stable ripeness tune)</li><li>Perfect ripe meter: ${ripeMeter.toFixed(0)}/100</li><li>คุณภาพสัญญาณ: ${sigLabel} (${sigScore.toFixed(0)}%)</li><li>Q spread: ${qSpread.toFixed(2)}</li><li>tau fallback: ${tauFallbackCount}/${NUM_TAPS}</li><li>สถานะผล: ${warnLowQuality ? "ใช้ได้แต่ควรวัดซ้ำเพื่อยืนยัน" : "ใช้ได้"}</li>`;
   saveHistory(ripe.label,brix,conf,melonScore,buyText,sigScore);
   speakSummaryAI({ripenessText:(ripenessExtraText || (group==="C" ? "แตงโมลูกนี้อยู่ในช่วงสุกพอดี" : ((group==="A"||group==="B") ? "แตงโมลูกนี้มีแนวโน้มสุกเกิน" : "แตงโมลูกนี้ใกล้สุก"))), sweetnessText:sweetnessLabel(brix), crispText, juiceText:juiceLabel(juice), hollowText, qualityText, hollowPercent});
   
@@ -909,13 +863,27 @@ function analyzeSession(){
     q_spread: Number(qSpread.toFixed(3)),
     tau_fallback_count: tauFallbackCount,
     measurement_status: warnLowQuality ? "ควรวัดซ้ำ" : "ใช้ได้",
-    model_version: "v25.2-v24audio-ripenessAI",
+    model_version: "v24.5-stable-ripeness-tune",
     boundary_ripeness_zone: isBoundaryRipeness
   });
 
 
 setStatus("ตรวจวัดเสร็จแล้ว");
 }
+
+function safeAnalyzeSession(){
+  try{
+    analyzeSession();
+  }catch(e){
+    console.error("analyzeSession error:", e);
+    setStatus("เกิดข้อผิดพลาดในการประมวลผล กรุณาวัดใหม่อีกครั้ง");
+    const resultEl = document.getElementById("result");
+    if(resultEl){
+      resultEl.innerHTML = "ระบบประมวลผลไม่สำเร็จ<br>กรุณาวัดใหม่อีกครั้ง";
+    }
+  }
+}
+
 function showRetry(conf,sigLabel,sigScore,qSpread,tauSpread,tauFallbackCount){
   document.getElementById("result").style.backgroundColor="#fff3cd";document.getElementById("result").innerHTML=`ผลการวัดยังไม่นิ่ง<br>คุณภาพสัญญาณ: ${sigLabel} (${sigScore.toFixed(0)}%)<br>ความเชื่อมั่น: ${conf.toFixed(0)}%<br>กรุณาเคาะใหม่อีกครั้ง`;
   document.getElementById("confVal").innerText=`${conf.toFixed(0)} %`;document.getElementById("melonScore").innerText="-";const badge=document.getElementById("buyBadge");badge.className="buyBadge maybe";badge.innerText="ควรวัดใหม่";document.getElementById("scoreExplain").innerText="ผลรอบนี้ยังไม่นิ่งพอสำหรับการสรุป";setBar("confBar",conf);
