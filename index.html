@@ -122,7 +122,7 @@
 <script>
 let lastKnockTimeV2483 = -Infinity;
 
-/* ===== v24.8.4 Stable Knock Trigger =====
+/* ===== v24.8.6 Stable Knock Trigger =====
    เป้าหมาย: ป้องกันเคาะ 1 ครั้ง แต่นับเป็น 2 ครั้ง จาก echo/rebound/decay
    หลักการ:
    - ใช้ RMS envelope หา hit จริง
@@ -131,14 +131,14 @@ let lastKnockTimeV2483 = -Infinity;
    - ignore secondary peaks ที่ตามหลัง main impact
 */
 const KNOCK_TRIGGER_V2483 = {
-  cooldownMs: 380,
-  minPeakGapMs: 380,
+  cooldownMs: 260,
+  minPeakGapMs: 260,
   preRollMs: 80,
   postRollMs: 420,
   rmsWindowMs: 18,
   rmsHopMs: 6,
-  thresholdMultiplier: 4.2,
-  minAbsoluteRms: 0.012,
+  thresholdMultiplier: 3.0,
+  minAbsoluteRms: 0.007,
   secondaryPeakRatio: 0.55
 };
 
@@ -273,7 +273,7 @@ function extractBestKnockSegmentV2483(samples, sr){
     segment: samples.slice(start, end),
     knockCount: knocks.length,
     triggerDebug: {
-      mode: "stable_trigger_v24.8.4",
+      mode: "stable_trigger_v24.8.6",
       noiseFloor: main.noiseFloor,
       threshold: main.threshold,
       acceptedTimes: knocks.map(k => Number(k.t.toFixed(3))),
@@ -538,7 +538,7 @@ function loop(){
   const rms = getRMS(timeData);
   const now = performance.now();
 
-  // v24.8.4 dynamic noise tracking เฉพาะตอนยังไม่จับ event
+  // v24.8.6 dynamic noise tracking เฉพาะตอนยังไม่จับ event
   if(captureState === "idle"){
     noiseFloor = 0.97 * noiseFloor + 0.03 * rms;
   }
@@ -548,7 +548,8 @@ function loop(){
     noiseFloor * KNOCK_TRIGGER_V2483.thresholdMultiplier
   );
 
-  const onset = rms > dynamicThreshold;
+  const suddenOnset = rms > Math.max(0.010, noiseFloor * 2.4);
+  const onset = rms > dynamicThreshold || suddenOnset;
   const inCooldown = (now - lastKnockTimeV2483) < KNOCK_TRIGGER_V2483.cooldownMs;
 
   if(captureState === "idle"){
@@ -557,7 +558,7 @@ function loop(){
       captureState = "capturing";
       eventFrames = [];
       window.triggerDebugV2483 = {
-        mode: "live_stable_trigger_v24.8.4",
+        mode: "live_stable_trigger_v24.8.6",
         noiseFloor,
         threshold: dynamicThreshold,
         firstRms: rms,
@@ -581,11 +582,11 @@ function loop(){
     });
 
     // เก็บสั้นลงเพื่อเน้น main impact ไม่ลาก echo/decay ยาวเกิน
-    if(eventFrames.length >= 14){
+    if(eventFrames.length >= 16){
       const feat = extractFeaturesFromEvent(eventFrames);
 
       if(feat){
-        feat.triggerMode = "live_stable_trigger_v24.8.4";
+        feat.triggerMode = "live_stable_trigger_v24.8.6";
         feat.triggerThreshold = dynamicThreshold;
         feat.triggerNoiseFloor = noiseFloor;
         feat.triggerRms = rms;
@@ -801,10 +802,10 @@ function calibrateJuiceFieldV227(rawJuice, Q, fMean, fStd, hollowIndex, lowRatio
 
 
 function classifyRipenessV248_TEST9(lowRatio, highRatio, brix, firmness, juice, hollowPercent, fMean, fPeak, fStd, hollowIndex, flatness, rolloff85, peakCount){
-  // v24.8.4 Ripe-Protection Patch
-  // แก้ปัญหา: ลูกสุกพอดีถูกทำนายเป็น "สุกเกิน" มากเกินไป
-  // หลักใหม่: ให้ "สุกเกิน/A" ออกเฉพาะเมื่อสัญญาณชัดมากเท่านั้น
-  // ไม่ใช้ hollow_index หรือ flatness ดึงเป็น A แบบง่าย ๆ อีกต่อไป
+  // v24.8.6 Conservative-Ripe Patch
+  // ปัญหาเดิม: แตงจริงสุกพอดี แต่แอปทายสุกเกิน
+  // แนวทาง: ลดการออก A ให้มากที่สุด และให้ C เป็น default ในโซนกลาง
+  // หมายเหตุ: ไม่แตะโมเดล Brix/Firmness/Juice
 
   const fm = safe(fMean, 0);
   const fp = safe(fPeak, 0);
@@ -812,63 +813,60 @@ function classifyRipenessV248_TEST9(lowRatio, highRatio, brix, firmness, juice, 
   const hi = safe(hollowIndex, 0);
   const fl = safe(flatness, 0);
   const pc = safe(peakCount, 0);
+  const hp = safe(hollowPercent, 0);
+  const firm = safe(firmness, 0);
+  const low = safe(lowRatio, 0);
 
   const harmonicFlag = (fp > 700 && fm < 620) || (fp > 1.85 * fm && fm < 540);
 
-  // v24.8.4: ใช้ f_mean จริงเป็นแกนหลักก่อน
-  // ไม่ใช้ f_peak/2 เป็นตัวลากลง A เพราะทำให้สุกพอดีโดนทายสุกเกินได้
+  // Base threshold แบบ conservative:
+  // ลด A ให้แคบมาก เพื่อกัน false สุกเกิน
   let group;
-  if(fm < 405) group = "A";        // สุกเกิน: ต้องต่ำจริง
-  else if(fm < 485) group = "B";   // สุกจัด
-  else if(fm < 555) group = "C";   // สุกพอดี
+  if(fm < 380) group = "A";        // สุกเกิน: ต้องต่ำมาก
+  else if(fm < 475) group = "B";   // สุกจัด
+  else if(fm < 570) group = "C";   // สุกพอดี: ขยายช่วง C
   else group = "D";                // ใกล้สุก
 
-  // C protection แบบแข็ง: ช่วงสุกพอดีของข้อมูลแอปจริง
-  // ถ้าอยู่ช่วงนี้ ห้ามดึงเป็น A ยกเว้นมีสัญญาณสุกเกินรุนแรงมากจริง ๆ
+  // C hard protection:
+  // ถ้าความถี่อยู่โซนกลาง ให้ถือเป็นสุกพอดีก่อน
+  const cHardProtection =
+    fm >= 455 &&
+    fm <= 585 &&
+    hi < 0.85;
+
+  // Very strong overripe เท่านั้นที่จะชนะ C protection ได้
   const veryStrongOverripe =
-    fm < 405 &&
-    hi > 0.74 &&
-    fs > 210 &&
-    (fl > 0.90 || pc >= 14);
+    fm < 390 &&
+    hi > 0.80 &&
+    fs > 230 &&
+    (fl > 0.93 || pc >= 16 || hp >= 22 || firm <= 8.5 || low > 0.45);
 
-  const ripeProtection =
-    fm >= 470 &&
-    fm <= 565 &&
-    hi < 0.78;
-
-  if(ripeProtection && !veryStrongOverripe){
+  if(cHardProtection && !veryStrongOverripe){
     group = "C";
   }
 
-  // D protection: ใกล้สุกยังต้องรักษาไว้
-  if(fm >= 555 && hi < 0.58){
+  // D protection
+  if(fm >= 570 && hi < 0.62){
     group = "D";
   }
 
-  // ลด false A: ถ้าเดิมเป็น A แต่ hollow/spread ไม่แรงพอ ให้ขยับขึ้นเป็น B
+  // ถ้า A แต่สัญญาณไม่แรงจริง ให้เลื่อนขึ้นเป็น B
   if(group === "A" && !veryStrongOverripe){
-    if(fm >= 385 || hi < 0.70 || fs < 190){
-      group = "B";
-    }
+    group = "B";
   }
 
-  // Strong overripe only: ใช้เฉพาะเคสชัดมาก
+  // สุกเกินออกเฉพาะ veryStrongOverripe เท่านั้น
   if(veryStrongOverripe){
     group = "A";
   }
 
-  // Flatness เป็นแค่ตัวช่วยเล็กมาก ไม่ดึง C เป็น A
-  if(group === "C" && fl > 0.94 && fm < 470 && hi > 0.72 && fs > 210){
-    group = "B";
-  }
-
-  // Harmonic guard: ใช้เพื่อกัน D ปลอมเท่านั้น ไม่ดึงลงถึง A
+  // Harmonic guard ห้ามดึงลง A
   if(harmonicFlag){
     const corrected = Math.min(fm, fp / 2);
-    if(group === "D" && corrected < 500 && hi >= 0.60){
+    if(group === "D" && corrected < 500 && hi >= 0.65){
       group = "C";
     }
-    if(group === "C" && corrected < 455 && hi >= 0.72 && fs > 200){
+    if(group === "C" && corrected < 445 && hi >= 0.78 && fs > 220){
       group = "B";
     }
   }
@@ -881,31 +879,28 @@ function getRipenessExtraNoteV248(fMean, group, hollowPercent, firmness, lowRati
   const hi = safe(hollowIndex, 0);
   const fl = safe(flatness, 0);
   const pc = safe(peakCount, 0);
-  const h = safe(hollowPercent, 0);
+  const hp = safe(hollowPercent, 0);
   const firm = safe(firmness, 0);
   const low = safe(lowRatio, 0);
   const notes = [];
 
-  if((fp > 700 && fm < 620) || (fp > 1.85 * fm && fm < 540)){
-    notes.push("harmonic_guard: พบ f_peak สูงผิดปกติ แต่ v24.8.4 ไม่ใช้ peak/2 ดึงผลลงเป็นสุกเกินโดยตรง");
-  }
-  if(group === "C" && fm >= 470 && fm <= 565 && hi < 0.78){
-    notes.push("C_protection: ล็อกช่วงสุกพอดีเพื่อกัน false สุกเกิน");
-  }
-  if(group === "D" && fm >= 555 && hi < 0.58){
-    notes.push("D_protection: f_mean สูงและ hollow_index ไม่สูง จึงคงผลเป็นใกล้สุก");
+  if(group === "C" && fm >= 455 && fm <= 585 && hi < 0.85){
+    notes.push("C_hard_protection: อยู่ในโซนกลาง จึงป้องกัน false สุกเกิน");
   }
   if(group === "A"){
-    notes.push("very_strong_overripe: สุกเกินจะออกเฉพาะเมื่อ f_mean ต่ำมาก + hollow/spread สูงมาก");
+    notes.push("very_strong_overripe_only: v24.8.6 ให้สุกเกินเฉพาะเมื่อ f_mean ต่ำมากและสัญญาณโพรง/เนื้อหลวมแรงมาก");
   }
-  if(group === "B" && fm < 485){
-    notes.push("B_range: จัดเป็นสุกจัด/เริ่มสุกมาก แต่ยังไม่ฟันธงสุกเกินถ้าสัญญาณไม่แรงพอ");
+  if(group === "B" && fm < 475){
+    notes.push("B_conservative: ต่ำกว่าช่วงสุกพอดี แต่ยังไม่ฟันธงสุกเกิน");
   }
-  if(fl > 0.94 && pc >= 14){
-    notes.push("flatness/peak_count สูง แต่ใช้เป็นตัวช่วยเท่านั้น ไม่ใช้ฟันธงสุกเกินเดี่ยว ๆ");
+  if(group === "D" && fm >= 570 && hi < 0.62){
+    notes.push("D_protection: f_mean สูงและ hollow_index ไม่สูง จึงคงเป็นใกล้สุก");
   }
-  if(group === "A" && (h >= 18 || firm <= 9 || low > 0.40)){
-    notes.push("คำเตือน: ควรตรวจซ้ำหรือผ่าดูประกอบ เพราะมีแนวโน้มโพรง/เนื้อหลวม");
+  if((fp > 700 && fm < 620) || (fp > 1.85 * fm && fm < 540)){
+    notes.push("harmonic_guard: ไม่ใช้ f_peak/2 ดึงผลลงเป็นสุกเกิน");
+  }
+  if(fl > 0.93 || pc >= 16){
+    notes.push("flatness/peak_count สูง แต่ใช้เป็นตัวประกอบเท่านั้น ไม่ฟันธง A เดี่ยว ๆ");
   }
 
   return notes.join(" | ");
@@ -1013,7 +1008,7 @@ function analyzeSession(){
   document.getElementById("confVal").innerText=`${conf.toFixed(0)} %`;document.getElementById("groupVal").innerText=`ช่วงสุก: ${group}`;
   setBar("brixBar",brix/14*100);setBar("firmBar",crispPct);setBar("juiceBar",juice);setBar("hollowBar",100-hollowPercent*2.5);setBar("confBar",conf);
   document.getElementById("featureList").innerHTML=`
-    <li>Q: ${Quse.toFixed(2)}</li><li>tau: ${tauUsed.toFixed(3)}</li><li>f_peak: ${avg.fPeak.toFixed(1)} Hz</li><li>f_mean: ${fMeanUse.toFixed(1)} Hz <b>(ใช้จำแนกระดับการสุก)</b></li><li>ripeness_extra_note: ${ripenessExtraNoteV248 || "-"}</li><li>f_std: ${fStdUse.toFixed(1)} Hz</li><li>f_variance: ${fVarUse.toFixed(1)}</li><li>hollow_index: ${hollowIndexUse.toFixed(3)}</li><li>Brix raw: ${brixRaw.toFixed(2)} °Bx → calibrated: ${brix.toFixed(2)} °Bx</li><li>Firmness raw model: ${firmnessRaw.toFixed(1)} N → calibrated: ${firmness.toFixed(1)} N</li><li>Juice raw: ${juiceRaw.toFixed(1)}% → calibrated: ${juice.toFixed(1)}%</li><li>Hollow raw: ${hollowRawPercent.toFixed(1)}% → v22.5: ${hollowPercentOriginal.toFixed(1)}% → v22.6: ${hollowPercent.toFixed(1)}%</li><li>high_ratio: ${highRatioUse.toFixed(3)}</li><li>low_ratio: ${lowRatioUse.toFixed(3)}</li><li>flatness: ${flatnessUse.toFixed(3)}</li><li>rolloff85: ${rolloff85Use.toFixed(1)} Hz</li><li>peak count: ${peakCountUse.toFixed(0)}</li><li>low_ratio: ${avg.lowRatio.toFixed(3)}</li><li>flatness: ${avg.flatness.toFixed(3)}</li><li>Audio120 ripeness label: ${ripenessLabel120}</li><li>Final ripeness group: ${group} (v24.8.4 ripe-protection rule)</li><li>Perfect ripe meter: ${ripeMeter.toFixed(0)}/100</li><li>คุณภาพสัญญาณ: ${sigLabel} (${sigScore.toFixed(0)}%)</li><li>Q spread: ${qSpread.toFixed(2)}</li><li>tau fallback: ${tauFallbackCount}/${NUM_TAPS}</li><li>สถานะผล: ${warnLowQuality ? "ใช้ได้แต่ควรวัดซ้ำเพื่อยืนยัน" : "ใช้ได้"}</li>`;
+    <li>Q: ${Quse.toFixed(2)}</li><li>tau: ${tauUsed.toFixed(3)}</li><li>f_peak: ${avg.fPeak.toFixed(1)} Hz</li><li>f_mean: ${fMeanUse.toFixed(1)} Hz <b>(ใช้จำแนกระดับการสุก)</b></li><li>ripeness_extra_note: ${ripenessExtraNoteV248 || "-"}</li><li>f_std: ${fStdUse.toFixed(1)} Hz</li><li>f_variance: ${fVarUse.toFixed(1)}</li><li>hollow_index: ${hollowIndexUse.toFixed(3)}</li><li>Brix raw: ${brixRaw.toFixed(2)} °Bx → calibrated: ${brix.toFixed(2)} °Bx</li><li>Firmness raw model: ${firmnessRaw.toFixed(1)} N → calibrated: ${firmness.toFixed(1)} N</li><li>Juice raw: ${juiceRaw.toFixed(1)}% → calibrated: ${juice.toFixed(1)}%</li><li>Hollow raw: ${hollowRawPercent.toFixed(1)}% → v22.5: ${hollowPercentOriginal.toFixed(1)}% → v22.6: ${hollowPercent.toFixed(1)}%</li><li>high_ratio: ${highRatioUse.toFixed(3)}</li><li>low_ratio: ${lowRatioUse.toFixed(3)}</li><li>flatness: ${flatnessUse.toFixed(3)}</li><li>rolloff85: ${rolloff85Use.toFixed(1)} Hz</li><li>peak count: ${peakCountUse.toFixed(0)}</li><li>low_ratio: ${avg.lowRatio.toFixed(3)}</li><li>flatness: ${avg.flatness.toFixed(3)}</li><li>Audio120 ripeness label: ${ripenessLabel120}</li><li>Final ripeness group: ${group} (v24.8.6 conservative-ripe rule)</li><li>Perfect ripe meter: ${ripeMeter.toFixed(0)}/100</li><li>คุณภาพสัญญาณ: ${sigLabel} (${sigScore.toFixed(0)}%)</li><li>Q spread: ${qSpread.toFixed(2)}</li><li>tau fallback: ${tauFallbackCount}/${NUM_TAPS}</li><li>สถานะผล: ${warnLowQuality ? "ใช้ได้แต่ควรวัดซ้ำเพื่อยืนยัน" : "ใช้ได้"}</li>`;
   saveHistory(ripe.label,brix,conf,melonScore,buyText,sigScore);
   speakSummaryAI({ripenessText:(ripenessExtraText || (group==="C" ? "แตงโมลูกนี้อยู่ในช่วงสุกพอดี" : ((group==="A"||group==="B") ? "แตงโมลูกนี้มีแนวโน้มสุกเกิน" : "แตงโมลูกนี้ใกล้สุก"))), sweetnessText:sweetnessLabel(brix), crispText, juiceText:juiceLabel(juice), hollowText, qualityText, hollowPercent});
   
@@ -1295,7 +1290,7 @@ function getTriggerDebugTextV2483(features){
   if(!features || !features.trigger_debug) return "";
   const d = features.trigger_debug;
   const times = (d.acceptedTimes || []).join(", ");
-  return `Trigger v24.8.4: ${d.mode || "-"} | เคาะจริงที่รับ: ${features.knock_count ?? "-"} | threshold=${Number(d.threshold||0).toFixed(4)} | noise=${Number(d.noiseFloor||0).toFixed(4)} | times=[${times}]`;
+  return `Trigger v24.8.6: ${d.mode || "-"} | เคาะจริงที่รับ: ${features.knock_count ?? "-"} | threshold=${Number(d.threshold||0).toFixed(4)} | noise=${Number(d.noiseFloor||0).toFixed(4)} | times=[${times}]`;
 }
 
 </script>

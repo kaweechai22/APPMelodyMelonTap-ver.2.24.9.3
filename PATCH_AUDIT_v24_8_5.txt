@@ -1,0 +1,30 @@
+PATCH_AUDIT_v24_8_5.txt
+
+ฐานไฟล์:
+- ใช้ v24.8.4 ripe-protection เป็นฐาน
+- คงโมเดลจำแนกความสุก v24.8.4 ไว้
+- ไม่แตะความหวาน/กรอบ/ฉ่ำ
+- ปรับเฉพาะระบบจับเสียงเคาะให้ไวขึ้น
+
+ปัญหาที่แก้:
+- v24.8.4 จับเสียงไม่ติด เพราะ trigger แข็งเกินไป
+
+ค่าที่ปรับ:
+- cooldownMs: 380 -> 260 ms
+- minPeakGapMs: 380 -> 260 ms
+- thresholdMultiplier: 4.2 -> 3.0
+- minAbsoluteRms: 0.012 -> 0.007
+- eventFrames: 14 -> 16 frames
+- เพิ่ม suddenOnset fallback: rms > max(0.010, noiseFloor*2.4)
+
+แนวคิด:
+- ไวกว่า v24.8.4
+- แต่ยังไม่ไวเท่าตัวก่อนที่เคาะ 1 ครั้งแล้วนับเป็น 2
+- ยังมี cooldown กัน echo/rebound อยู่
+
+ถ้ายังจับไม่ติด:
+- ลด thresholdMultiplier เป็น 2.5
+- ลด minAbsoluteRms เป็น 0.005
+
+ถ้ายังจับซ้ำ:
+- เพิ่ม cooldownMs เป็น 320
